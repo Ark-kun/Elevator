@@ -1,16 +1,27 @@
-﻿using Roslyn.Compilers;
-using Roslyn.Compilers.Common;
-using Roslyn.Compilers.CSharp;
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Roslyn.Compilers.CSharp {
     public static class ElevatorHelpers {
+        const string _opApplicationName = "op_Application";
+
         public static bool IsElevatedType(this TypeSymbol type) {
-            return type.GetMembers().Where(m => m.Name == "op_Apply").Any(); //TODO: write real checks
+            return type.GetMembers().Where(m => m.Name == _opApplicationName).Any(); //TODO: write real checks
+        }
+
+        private static BoundExpression CreateDummyTypedExpression(TypeSymbol type) {
+            return new BoundParameter( //replace with something easier
+                default(SyntaxNode),
+                new SourceSimpleParameterSymbol(
+                    default(Symbol),
+                    type,
+                    0,
+                    RefKind.None,
+                    "$_dummy_name_1",
+                    ReadOnlyArray<Location>.Empty
+                ),
+                type
+            );
         }
 
         internal static BoundExpression BindUnaryOperatorCoreEx(this Binder binder, SyntaxNode syntax, string operatorText, BoundExpression operand, DiagnosticBag diagnostics) {
@@ -22,13 +33,15 @@ namespace Roslyn.Compilers.CSharp {
                 nonElevatedDiagnostics.Free();
                 return boundOperator;
             }
-            //TODO: search ancestors here and after
+
+            IEnumerable<BoundExpression> originalArguments = new BoundExpression[] { operand };
+
+            //TODO: We need to search ancestors here and in most of the following code
             if (!operand.Type.IsElevatedType()) {
                 diagnostics.Add(nonElevatedDiagnostics);
                 nonElevatedDiagnostics.Free();
                 return boundOperator;
             }
-
 
             NamedTypeSymbol elevatedTypeSymbol = (NamedTypeSymbol)operand.Type;
 
@@ -47,88 +60,101 @@ namespace Roslyn.Compilers.CSharp {
 
             //TODO:!!!Handle built-in operators
 
-            BoundParameter loweredOperatorFishingNode = new BoundParameter(
-                default(SyntaxNode),
-                new SourceSimpleParameterSymbol(
-                    default(Symbol),
-                    loweredType,
-                    0,
-                    RefKind.None,
-                    "$_dummy_name_1",
-                    ReadOnlyArray<Location>.Empty
-                ),
-                loweredType
-            );
             BoundUnaryOperator loweredOperatorNode = (BoundUnaryOperator)binder.BindUnaryOperatorCore(
                 syntax, //change
                 operatorText,
-                loweredOperatorFishingNode,
+                CreateDummyTypedExpression(loweredType),
                 elevatedDiagnostics
             );
-            MethodSymbol loweredOperatorSymbol = (MethodSymbol)loweredOperatorNode.ExpressionSymbol;
-            //[Roslyn.Compilers.CSharp.SourceUserDefinedOperatorSymbol] = "Method MyClass MyClass.op_UnaryNegation(MyClass a)"
 
-            var loweredOperatorTypeExpr = new BoundTypeExpression(
-                default(SyntaxNode),
-                (TypeSymbol)loweredOperatorSymbol.ContainingSymbol
-            );
-            var elevatedOperatorTypeExpr = new BoundTypeExpression(
-                default(SyntaxNode),
-                elevatedTypeSymbol
+            var applicationOperatorCallExpr = binder.BindElevatedOperation(
+                syntax,
+                elevatedTypeSymbol,
+                originalArguments,
+                loweredOperatorNode.MethodOpt,
+                elevatedDiagnostics
             );
 
-            var lr1 = LookupResult.GetInstance();
-            lr1.SetFrom(LookupResult.Good(loweredOperatorSymbol));
-            var loweredOperatorMethodExpr = new BoundMethodGroup(
+            diagnostics.Add(elevatedDiagnostics);
+            elevatedDiagnostics.Free();
+            return applicationOperatorCallExpr;
+        }
+
+        private static BoundCall BindElevatedOperation(this Binder binder, SyntaxNode originalOperationSyntax, NamedTypeSymbol primaryElevatedTypeSymbol, IEnumerable<BoundExpression> originalArguments, MethodSymbol loweredOperationSymbol, DiagnosticBag diagnostics) {
+            var loweredOperationTargetTypeExpr = new BoundTypeExpression(
+                default(SyntaxNode),
+                (TypeSymbol)loweredOperationSymbol.ContainingSymbol
+            );
+            var elevatedTypeExpr = new BoundTypeExpression(
+                default(SyntaxNode),
+                primaryElevatedTypeSymbol
+            );
+
+            var loweredOperationLookupResult = LookupResult.GetInstance();
+            loweredOperationLookupResult.SetFrom(LookupResult.Good(loweredOperationSymbol));
+            var loweredOperationMethodExpr = new BoundMethodGroup(
                 Syntax.MemberAccessExpression(
                     SyntaxKind.MemberAccessExpression,
                     Syntax.IdentifierName("$_dummy_target_2"),
                     Syntax.IdentifierName("$_dummy_member_2")
                 ),
                 ReadOnlyArray<TypeSymbol>.Empty,
-                loweredOperatorTypeExpr,
-                loweredOperatorSymbol.Name,
-                ReadOnlyArray.Singleton(loweredOperatorSymbol),
-                lr1,
+                loweredOperationTargetTypeExpr,
+                loweredOperationSymbol.Name,
+                ReadOnlyArray.Singleton(loweredOperationSymbol),
+                loweredOperationLookupResult,
                 false
             );
-            loweredOperatorMethodExpr.WasCompilerGenerated = true;
-            lr1.Free();
+            loweredOperationMethodExpr.WasCompilerGenerated = true;
+            loweredOperationLookupResult.Free();
 
-            var applyOperatorAccessExpr = binder.BindMemberAccessWithBoundLeft(
+
+            var applicationOperatorCallExpr = binder.BindElevatedOperation(
+                originalOperationSyntax,
+                elevatedTypeExpr,
+                originalArguments,
+                loweredOperationMethodExpr,
+                diagnostics
+            );
+            return applicationOperatorCallExpr;
+        }
+
+        private static BoundCall BindElevatedOperation(this Binder binder, SyntaxNode originalOperationSyntax, BoundTypeExpression primaryElevatedType, IEnumerable<BoundExpression> originalArguments, BoundMethodGroup loweredOperation, DiagnosticBag diagnostics) {
+            var applicationOperatorExpr = binder.BindMemberAccessWithBoundLeft(
                 Syntax.MemberAccessExpression(
                     SyntaxKind.MemberAccessExpression,
                     Syntax.IdentifierName("$_dummy_target_3"),
                     Syntax.IdentifierName("$_dummy_member_3")
                 ),
-                elevatedOperatorTypeExpr,
-                Syntax.IdentifierName("op_Apply"),
+                primaryElevatedType,
+                Syntax.IdentifierName(_opApplicationName),
                 Syntax.Token(SyntaxKind.DotToken),
                 true,
-                elevatedDiagnostics
+                diagnostics
             );
 
             //<BindInvocationExpression - unpacked>
             AnalyzedArguments arguments = AnalyzedArguments.GetInstance();
-            arguments.Arguments.Add(operand);
-            arguments.Arguments.Add(loweredOperatorMethodExpr);
+            arguments.Arguments.AddRange(originalArguments);
+            arguments.Arguments.Add(loweredOperation);
 
-            var applyOperatorCallExpr = binder.BindInvocationExpression(
-                syntax,
+            var applicationOperatorCallExpr = binder.BindInvocationExpression(
+                originalOperationSyntax,
                 Syntax.EmptyStatement(),
-                "op_Apply",
-                applyOperatorAccessExpr,
+                _opApplicationName,
+                applicationOperatorExpr,
                 arguments,
-                elevatedDiagnostics,
+                diagnostics,
                 null
             );
-            applyOperatorCallExpr.WasCompilerGenerated = true;
+            applicationOperatorCallExpr.WasCompilerGenerated = true;
             arguments.Free();
             //</BindInvocationExpression - unpacked>
 
-            diagnostics.Add(elevatedDiagnostics);
-            elevatedDiagnostics.Free();
-            return applyOperatorCallExpr;
+            return applicationOperatorCallExpr;
         }
     }
+
+
+
 }
