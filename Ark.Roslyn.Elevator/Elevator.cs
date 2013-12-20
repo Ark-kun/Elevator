@@ -2,6 +2,7 @@
 using System.Linq;
 
 namespace Roslyn.Compilers.CSharp {
+    //TODO: check postfix unary operators; lift built-in operators; lift methods
     public static class ElevatorHelpers {
         const string _opApplicationName = "op_Application";
 
@@ -59,13 +60,92 @@ namespace Roslyn.Compilers.CSharp {
             TypeSymbol loweredType = elevatedTypeSymbol.TypeArguments.Single();
 
             //TODO:!!!Handle built-in operators
-
-            BoundUnaryOperator loweredOperatorNode = (BoundUnaryOperator)binder.BindUnaryOperatorCore(
-                syntax, //change
-                operatorText,
-                CreateDummyTypedExpression(loweredType),
+            //TODO: handle conversions
+            //BoundUnaryOperator loweredOperatorNode = (BoundUnaryOperator)binder.BindUnaryOperatorCore(
+            //    syntax, //change
+            //    operatorText,
+            //    CreateDummyTypedExpression(loweredType),
+            //    elevatedDiagnostics
+            //);
+            BoundUnaryOperator loweredOperatorNode = (BoundUnaryOperator)binder.BindUnaryOperator(
+                Syntax.PrefixUnaryExpression(
+                    syntax.Kind,
+                    Syntax.DefaultExpression(Syntax.ParseTypeName(loweredType.ToDisplayString()))
+                ),
                 elevatedDiagnostics
             );
+
+            var applicationOperatorCallExpr = binder.BindElevatedOperation(
+                syntax,
+                elevatedTypeSymbol,
+                originalArguments,
+                loweredOperatorNode.MethodOpt,
+                elevatedDiagnostics
+            );
+
+            diagnostics.Add(elevatedDiagnostics);
+            elevatedDiagnostics.Free();
+            return applicationOperatorCallExpr;
+        }
+
+        internal static BoundExpression BindBinaryOperatorCoreEx(this Binder binder, BinaryExpressionSyntax syntax, DiagnosticBag diagnostics) {
+            DiagnosticBag nonElevatedDiagnostics = DiagnosticBag.GetInstance();
+            var boundOperator = binder.BindBinaryOperatorCore(syntax, nonElevatedDiagnostics);
+
+            if (boundOperator.ResultKind != LookupResultKind.OverloadResolutionFailure) {
+                diagnostics.Add(nonElevatedDiagnostics);
+                nonElevatedDiagnostics.Free();
+                return boundOperator;
+            }
+
+            BoundExpression left = binder.BindValue(syntax.Left, diagnostics, Binder.GetBinaryAssignmentKind(syntax.Kind));
+            BoundExpression right = binder.BindValue(syntax.Right, diagnostics, Binder.BindValueKind.RValue);
+
+            IEnumerable<BoundExpression> originalArguments = new BoundExpression[] { left, right };
+            var argumentTypes = originalArguments.Select(arg => arg.Type).ToList();
+            var elevatedArgumentsTypes = argumentTypes.Where(type => type.IsElevatedType()).ToList();
+            //var elevatedArguments = originalArguments.Where(arg => arg.Type.IsElevatedType()).ToList();
+
+            //TODO: We need to search ancestors here and in most of the following code
+            if (!elevatedArgumentsTypes.Any()) {
+                diagnostics.Add(nonElevatedDiagnostics);
+                nonElevatedDiagnostics.Free();
+                return boundOperator;
+            }
+
+            //TODO: Choose the first appropriate, not just the first elevated type
+            NamedTypeSymbol elevatedTypeSymbol = (NamedTypeSymbol)elevatedArgumentsTypes.First();
+
+            //What if ancestors have additional type arguments?
+            if (elevatedTypeSymbol.TypeArguments.Count != 1) {
+                diagnostics.Add(nonElevatedDiagnostics);
+                nonElevatedDiagnostics.Free();
+                //binder.Error(diagnostics, ErrorCode.ERR_AmbigUnaryOp, ...);
+                return boundOperator;
+            }
+
+            DiagnosticBag elevatedDiagnostics = DiagnosticBag.GetInstance();
+
+            //Should we unwrap multiple times?
+            TypeSymbol loweredType = elevatedTypeSymbol.TypeArguments.Single();
+
+
+            var loweredArgumentTypes = argumentTypes.Select(type => type.IsElevatedType() ? ((NamedTypeSymbol)type).TypeArguments.Single() : type).ToList();
+
+            //Syntax.Parameter(new SyntaxList<AttributeListSyntax>(), new SyntaxTokenList(), Syntax.ParseTypeName(left.Type.ToDisplayString()), Syntax.Identifier("dummy"), null),
+            var loweredOperatorSyntax = Syntax.BinaryExpression(
+                syntax.Kind,
+                Syntax.DefaultExpression(Syntax.ParseTypeName(loweredArgumentTypes[0].ToDisplayString())),
+                Syntax.DefaultExpression(Syntax.ParseTypeName(loweredArgumentTypes[1].ToDisplayString()))
+            );
+            //TODO:!!!Handle built-in operators
+            //TODO: handle conversions
+            BoundExpression loweredOperatorExpr = binder.BindBinaryOperatorCore(
+                loweredOperatorSyntax, //change
+                elevatedDiagnostics
+            );
+
+            BoundBinaryOperator loweredOperatorNode = (BoundBinaryOperator)loweredOperatorExpr;
 
             var applicationOperatorCallExpr = binder.BindElevatedOperation(
                 syntax,
