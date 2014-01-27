@@ -10,6 +10,11 @@ namespace Roslyn.Compilers.CSharp {
             return type.GetMembers().Where(m => m.Name == _opApplicationName).Any(); //TODO: write real checks
         }
 
+        internal static BoundExpression BindUnaryOperatorEx(this Binder binder, PrefixUnaryExpressionSyntax node, DiagnosticBag diagnostics) {
+            BoundExpression operand = binder.BindValue(node.Operand, diagnostics, Binder.GetUnaryAssignmentKind(node.Kind));
+            return (binder.BindIntegralMinValConstants(node, operand, diagnostics) ?? binder.BindUnaryOperatorCoreEx(node, node.OperatorToken.Text, operand, diagnostics));
+        }
+
         internal static BoundExpression BindUnaryOperatorCoreEx(this Binder binder, SyntaxNode syntax, string operatorText, BoundExpression operand, DiagnosticBag diagnostics) {
             DiagnosticBag nonElevatedDiagnostics = DiagnosticBag.GetInstance();
             var boundOperator = binder.BindUnaryOperatorCore(syntax, operatorText, operand, nonElevatedDiagnostics);
@@ -87,9 +92,9 @@ namespace Roslyn.Compilers.CSharp {
             return applicationOperatorCallExpr;
         }
 
-        internal static BoundExpression BindBinaryOperatorCoreEx(this Binder binder, BinaryExpressionSyntax syntax, DiagnosticBag diagnostics) {
+        internal static BoundExpression BindBinaryOperatorEx(this Binder binder, BinaryExpressionSyntax syntax, DiagnosticBag diagnostics) {
             DiagnosticBag nonElevatedDiagnostics = DiagnosticBag.GetInstance();
-            var boundOperator = binder.BindBinaryOperatorCore(syntax, nonElevatedDiagnostics);
+            var boundOperator = binder.BindBinaryOperator(syntax, nonElevatedDiagnostics);
 
             if (boundOperator.ResultKind != LookupResultKind.OverloadResolutionFailure) {
                 diagnostics.Add(nonElevatedDiagnostics);
