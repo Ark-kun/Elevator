@@ -1,9 +1,12 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
+using Microsoft.CodeAnalysis.CSharp.Symbols;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Roslyn.Utilities;
 
-namespace Roslyn.Compilers.CSharp {
+namespace Microsoft.CodeAnalysis.CSharp {
     //TODO: check postfix unary operators; lift built-in operators; lift methods
-    public static class ElevatorHelpers {
+    internal static class ElevatorHelpers {
         const string _opApplicationName = "op_Application";
 
         public static bool IsElevatedType(this TypeSymbol type) {
@@ -15,12 +18,12 @@ namespace Roslyn.Compilers.CSharp {
             return (binder.BindIntegralMinValConstants(node, operand, diagnostics) ?? binder.BindUnaryOperatorCoreEx(node, node.OperatorToken.Text, operand, diagnostics));
         }
 
-        internal static BoundExpression BindUnaryOperatorCoreEx(this Binder binder, SyntaxNode syntax, string operatorText, BoundExpression operand, DiagnosticBag diagnostics) {
+        internal static BoundExpression BindUnaryOperatorCoreEx(this Binder binder, CSharpSyntaxNode syntax, string operatorText, BoundExpression operand, DiagnosticBag diagnostics) {
             DiagnosticBag nonElevatedDiagnostics = DiagnosticBag.GetInstance();
             var boundOperator = binder.BindUnaryOperatorCore(syntax, operatorText, operand, nonElevatedDiagnostics);
 
             if (boundOperator.ResultKind != LookupResultKind.OverloadResolutionFailure) {
-                diagnostics.Add(nonElevatedDiagnostics);
+                diagnostics.AddRange(nonElevatedDiagnostics);
                 nonElevatedDiagnostics.Free();
                 return boundOperator;
             }
@@ -29,7 +32,7 @@ namespace Roslyn.Compilers.CSharp {
 
             //TODO: We need to search ancestors here and in most of the following code
             if (!operand.Type.IsElevatedType()) {
-                diagnostics.Add(nonElevatedDiagnostics);
+                diagnostics.AddRange(nonElevatedDiagnostics);
                 nonElevatedDiagnostics.Free();
                 return boundOperator;
             }
@@ -37,8 +40,8 @@ namespace Roslyn.Compilers.CSharp {
             NamedTypeSymbol elevatedTypeSymbol = (NamedTypeSymbol)operand.Type;
 
             //What if ancestors have additional type arguments?
-            if (elevatedTypeSymbol.TypeArguments.Count != 1) {
-                diagnostics.Add(nonElevatedDiagnostics);
+            if (elevatedTypeSymbol.TypeArguments.Count() != 1) {
+                diagnostics.AddRange(nonElevatedDiagnostics);
                 nonElevatedDiagnostics.Free();
                 //binder.Error(diagnostics, ErrorCode.ERR_AmbigUnaryOp, ...);
                 return boundOperator;
@@ -49,30 +52,31 @@ namespace Roslyn.Compilers.CSharp {
             //Should we unwrap multiple times?
             TypeSymbol loweredArgumentType = elevatedTypeSymbol.TypeArguments.Single();
 
-            var callSyntax = Syntax.InvocationExpression(
-                Syntax.MemberAccessExpression(
-                    SyntaxKind.MemberAccessExpression,
-                    Syntax.ParseTypeName(elevatedTypeSymbol.ToDisplayString()),
-                    Syntax.IdentifierName(_opApplicationName)
+            var callSyntax = SyntaxFactory.InvocationExpression(
+                SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    SyntaxFactory.ParseTypeName(elevatedTypeSymbol.ToDisplayString()),
+                    SyntaxFactory.IdentifierName(_opApplicationName)
                 ),
-                Syntax.ArgumentList(
-                    Syntax.SeparatedList<ArgumentSyntax>(
-                        Syntax.Argument((ExpressionSyntax)syntax),
-                        Syntax.Token(SyntaxKind.CommaToken),
-                        Syntax.Argument(
-                            Syntax.ParenthesizedLambdaExpression(
-                                Syntax.ParameterList(
-                                    Syntax.SeparatedList<ParameterSyntax>(
-                                        Syntax.Parameter(Syntax.Identifier("$a"))
-                                            .WithType(Syntax.ParseTypeName(loweredArgumentType.ToDisplayString()))
+                SyntaxFactory.ArgumentList(
+                    SyntaxFactory.SeparatedList(
+                        new[] {
+                            SyntaxFactory.Argument((ExpressionSyntax)syntax),
+                            SyntaxFactory.Argument(
+                                SyntaxFactory.ParenthesizedLambdaExpression(
+                                    SyntaxFactory.ParameterList(
+                                        SyntaxFactory.SingletonSeparatedList(
+                                            SyntaxFactory.Parameter(SyntaxFactory.Identifier("$a"))
+                                                .WithType(SyntaxFactory.ParseTypeName(loweredArgumentType.ToDisplayString()))
+                                        )
+                                    ),
+                                    SyntaxFactory.PrefixUnaryExpression(
+                                        syntax.Kind,
+                                        SyntaxFactory.IdentifierName("$a")
                                     )
-                                ),
-                                Syntax.PrefixUnaryExpression(
-                                    syntax.Kind,
-                                    Syntax.IdentifierName("$a")
                                 )
                             )
-                        )
+                        }
                     )
                 )
             );
@@ -80,30 +84,28 @@ namespace Roslyn.Compilers.CSharp {
             //var clonedCallSyntax = ((SyntaxNode)syntax).ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
             //var clonedCallSyntax = ((SyntaxNode)syntax.Parent).ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
             ////var clonedCallSyntax = callSyntax.Green.ToRed();
-            var clonedCallSyntax = SyntaxNode.CloneNodeAsRoot(callSyntax, syntax.SyntaxTree);
+            var clonedCallSyntax = CSharpSyntaxNode.CloneNodeAsRoot(callSyntax, syntax.SyntaxTree);
 
             var applicationOperatorCallExpr = binder.BindExpression(
                 clonedCallSyntax,
                 elevatedDiagnostics
             );
 
-            diagnostics.Add(elevatedDiagnostics);
+            diagnostics.AddRange(elevatedDiagnostics);
             elevatedDiagnostics.Free();
             return applicationOperatorCallExpr;
         }
 
-        internal static BoundExpression BindBinaryOperatorEx(this Binder binder, BinaryExpressionSyntax syntax, DiagnosticBag diagnostics) {
+        //TODO: Implement the elevation-aware version of the BindConditionalLogicalOperator method
+        internal static BoundExpression BindSimpleBinaryOperatorEx(this Binder binder, BinaryExpressionSyntax syntax, DiagnosticBag diagnostics, BoundExpression left, BoundExpression right) {
             DiagnosticBag nonElevatedDiagnostics = DiagnosticBag.GetInstance();
-            var boundOperator = binder.BindBinaryOperator(syntax, nonElevatedDiagnostics);
+            var boundOperator = binder.BindSimpleBinaryOperator(syntax, nonElevatedDiagnostics, left, right);
 
             if (boundOperator.ResultKind != LookupResultKind.OverloadResolutionFailure) {
-                diagnostics.Add(nonElevatedDiagnostics);
+                diagnostics.AddRange(nonElevatedDiagnostics);
                 nonElevatedDiagnostics.Free();
                 return boundOperator;
             }
-
-            BoundExpression left = binder.BindValue(syntax.Left, diagnostics, Binder.GetBinaryAssignmentKind(syntax.Kind));
-            BoundExpression right = binder.BindValue(syntax.Right, diagnostics, Binder.BindValueKind.RValue);
 
             IEnumerable<BoundExpression> originalArguments = new BoundExpression[] { left, right };
             var argumentTypes = originalArguments.Select(arg => arg.Type).ToList();
@@ -112,7 +114,7 @@ namespace Roslyn.Compilers.CSharp {
 
             //TODO: We need to search ancestors here and in most of the following code
             if (!elevatedArgumentsTypes.Any()) {
-                diagnostics.Add(nonElevatedDiagnostics);
+                diagnostics.AddRange(nonElevatedDiagnostics);
                 nonElevatedDiagnostics.Free();
                 return boundOperator;
             }
@@ -121,8 +123,8 @@ namespace Roslyn.Compilers.CSharp {
             NamedTypeSymbol elevatedTypeSymbol = (NamedTypeSymbol)elevatedArgumentsTypes.First();
 
             //What if ancestors have additional type arguments?
-            if (elevatedTypeSymbol.TypeArguments.Count != 1) {
-                diagnostics.Add(nonElevatedDiagnostics);
+            if (elevatedTypeSymbol.TypeArguments.Count() != 1) {
+                diagnostics.AddRange(nonElevatedDiagnostics);
                 nonElevatedDiagnostics.Free();
                 //binder.Error(diagnostics, ErrorCode.ERR_AmbigUnaryOp, ...);
                 return boundOperator;
@@ -132,37 +134,38 @@ namespace Roslyn.Compilers.CSharp {
 
             var loweredArgumentTypes = argumentTypes.Select(type => type.IsElevatedType() ? ((NamedTypeSymbol)type).TypeArguments.Single() : type).ToList();
 
-            var callSyntax = Syntax.InvocationExpression(
-                Syntax.MemberAccessExpression(
-                    SyntaxKind.MemberAccessExpression,
-                    Syntax.ParseTypeName(elevatedTypeSymbol.ToDisplayString()),
-                    Syntax.IdentifierName(_opApplicationName)
+            var callSyntax = SyntaxFactory.InvocationExpression(
+                SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    SyntaxFactory.ParseTypeName(elevatedTypeSymbol.ToDisplayString()),
+                    SyntaxFactory.IdentifierName(_opApplicationName)
                 ),
-                Syntax.ArgumentList(
-                    Syntax.SeparatedList<ArgumentSyntax>(
-                        Syntax.Argument((ExpressionSyntax)left.Syntax),
-                        Syntax.Token(SyntaxKind.CommaToken),
-                        Syntax.Argument((ExpressionSyntax)right.Syntax),
-                        Syntax.Token(SyntaxKind.CommaToken),
-                        Syntax.Argument(
-                            Syntax.ParenthesizedLambdaExpression(
-                                Syntax.ParameterList(
-                                    Syntax.SeparatedList<ParameterSyntax>(
-                                        Syntax.Parameter(Syntax.Identifier("$a"))
-                                            .WithType(Syntax.ParseTypeName(loweredArgumentTypes[0].ToDisplayString())),
-                                        Syntax.Token(SyntaxKind.CommaToken),
-                                        Syntax.Parameter(Syntax.Identifier("$b"))
-                                            .WithType(Syntax.ParseTypeName(loweredArgumentTypes[1].ToDisplayString()))
+                SyntaxFactory.ArgumentList(
+                    SyntaxFactory.SeparatedList(
+                        new[] {
+                            SyntaxFactory.Argument((ExpressionSyntax)left.Syntax),
+                            SyntaxFactory.Argument((ExpressionSyntax)right.Syntax),
+                            SyntaxFactory.Argument(
+                                SyntaxFactory.ParenthesizedLambdaExpression(
+                                    SyntaxFactory.ParameterList(
+                                        SyntaxFactory.SeparatedList(
+                                            new[] {
+                                                SyntaxFactory.Parameter(SyntaxFactory.Identifier("$a"))
+                                                    .WithType(SyntaxFactory.ParseTypeName(loweredArgumentTypes[0].ToDisplayString())),
+                                                SyntaxFactory.Parameter(SyntaxFactory.Identifier("$b"))
+                                                    .WithType(SyntaxFactory.ParseTypeName(loweredArgumentTypes[1].ToDisplayString()))
+                                            }
+                                        )
+                                    ),
+                                    SyntaxFactory.BinaryExpression(
+                                        syntax.Kind,
+                                        SyntaxFactory.IdentifierName("$a"),
+                                        syntax.OperatorToken,
+                                        SyntaxFactory.IdentifierName("$b")
                                     )
-                                ),
-                                Syntax.BinaryExpression(
-                                    syntax.Kind,
-                                    Syntax.IdentifierName("$a"),
-                                    syntax.OperatorToken,
-                                    Syntax.IdentifierName("$b")
                                 )
                             )
-                        )
+                        }
                     )
                 )
             );
@@ -170,14 +173,14 @@ namespace Roslyn.Compilers.CSharp {
             //var res = ((SyntaxNode)syntax).ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
             //var res2 = ((SyntaxNode)syntax.Parent).ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
             ////var redSyntax = callSyntax.Green.ToRed
-            var clonedCallSyntax = SyntaxNode.CloneNodeAsRoot(callSyntax, syntax.SyntaxTree);
+            var clonedCallSyntax = CSharpSyntaxNode.CloneNodeAsRoot(callSyntax, syntax.SyntaxTree);
 
             var applicationOperatorCallExpr = binder.BindExpression(
                 clonedCallSyntax,
                 elevatedDiagnostics
             );
 
-            diagnostics.Add(elevatedDiagnostics);
+            diagnostics.AddRange(elevatedDiagnostics);
             elevatedDiagnostics.Free();
             return applicationOperatorCallExpr;
         }
