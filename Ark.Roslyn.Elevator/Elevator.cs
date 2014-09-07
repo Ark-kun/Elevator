@@ -61,7 +61,7 @@ namespace Microsoft.CodeAnalysis.CSharp {
                 SyntaxFactory.ArgumentList(
                     SyntaxFactory.SeparatedList(
                         new[] {
-                            SyntaxFactory.Argument((ExpressionSyntax)syntax),
+                            SyntaxFactory.Argument((ExpressionSyntax)operand.Syntax),
                             SyntaxFactory.Argument(
                                 SyntaxFactory.ParenthesizedLambdaExpression(
                                     SyntaxFactory.ParameterList(
