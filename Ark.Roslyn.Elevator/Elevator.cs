@@ -80,14 +80,10 @@ namespace Microsoft.CodeAnalysis.CSharp {
                     )
                 )
             );
-            ////var clonedCallSyntax = syntax.SyntaxTree.GetRoot().ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
-            //var clonedCallSyntax = ((SyntaxNode)syntax).ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
-            //var clonedCallSyntax = ((SyntaxNode)syntax.Parent).ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
-            ////var clonedCallSyntax = callSyntax.Green.ToRed();
-            var clonedCallSyntax = CSharpSyntaxNode.CloneNodeAsRoot(callSyntax, syntax.SyntaxTree);
+            var reintegratedCallSyntax = CSharpSyntaxNode.CloneNodeAsRoot(callSyntax, syntax.SyntaxTree);
 
             var applicationOperatorCallExpr = binder.BindExpression(
-                clonedCallSyntax,
+                reintegratedCallSyntax,
                 elevatedDiagnostics
             );
 
@@ -169,14 +165,10 @@ namespace Microsoft.CodeAnalysis.CSharp {
                     )
                 )
             );
-            ////var res = syntax.SyntaxTree.GetRoot().ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
-            //var res = ((SyntaxNode)syntax).ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
-            //var res2 = ((SyntaxNode)syntax.Parent).ReplaceNode((SyntaxNode)syntax, (SyntaxNode)callSyntax);
-            ////var redSyntax = callSyntax.Green.ToRed
-            var clonedCallSyntax = CSharpSyntaxNode.CloneNodeAsRoot(callSyntax, syntax.SyntaxTree);
+            var reintegratedCallSyntax = CSharpSyntaxNode.CloneNodeAsRoot(callSyntax, syntax.SyntaxTree);
 
             var applicationOperatorCallExpr = binder.BindExpression(
-                clonedCallSyntax,
+                reintegratedCallSyntax,
                 elevatedDiagnostics
             );
 
