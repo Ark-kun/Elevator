@@ -14,7 +14,7 @@ namespace Microsoft.CodeAnalysis.CSharp {
         }
 
         internal static BoundExpression BindUnaryOperatorEx(this Binder binder, PrefixUnaryExpressionSyntax node, DiagnosticBag diagnostics) {
-            BoundExpression operand = binder.BindValue(node.Operand, diagnostics, Binder.GetUnaryAssignmentKind(node.Kind));
+            BoundExpression operand = binder.BindValue(node.Operand, diagnostics, Binder.GetUnaryAssignmentKind(node.Kind()));
             return (binder.BindIntegralMinValConstants(node, operand, diagnostics) ?? binder.BindUnaryOperatorCoreEx(node, node.OperatorToken.Text, operand, diagnostics));
         }
 
@@ -61,7 +61,7 @@ namespace Microsoft.CodeAnalysis.CSharp {
                         )
                     ),
                     SyntaxFactory.PrefixUnaryExpression(
-                        syntax.Kind,
+                        syntax.Kind(),
                         SyntaxFactory.IdentifierName("$a")
                     )
                 );
@@ -153,7 +153,7 @@ namespace Microsoft.CodeAnalysis.CSharp {
                             .WithType(SyntaxFactory.ParseTypeName(loweredArgumentTypes[1].ToDisplayString()))
                     ),
                     SyntaxFactory.BinaryExpression(
-                        syntax.Kind,
+                        syntax.Kind(),
                         SyntaxFactory.IdentifierName("$arg1"),
                         SyntaxFactory.IdentifierName("$arg2")
                     )
